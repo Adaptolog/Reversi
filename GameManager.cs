@@ -1,14 +1,12 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class GameManager : MonoBehaviour
 {
     [SerializeField]
     private Camera cam;
-
-    [SerializeField]
-    private LayerMask boardLayer;
 
     [SerializeField]
     private Disc DiscBlackUp;
@@ -17,13 +15,15 @@ public class GameManager : MonoBehaviour
     private Disc DiscWhiteUp;
 
     [SerializeField]
-    private GameObject hightlightPrefab;
+    private GameObject highlightPrefab;
+
+    [SerializeField]
+    private UIManager uiManager;
 
     private Dictionary<Player, Disc> discPrefabs = new Dictionary<Player, Disc>();
     private GameState gameState = new GameState();
     private Disc[,] discs = new Disc[8, 8];
-    private bool canMove = true;
-    private List<GameObject> hightlights = new List<GameObject>();
+    private List<GameObject> highlights = new List<GameObject>();
 
     // Start is called before the first frame update
     private void Start()
@@ -33,6 +33,7 @@ public class GameManager : MonoBehaviour
 
         AddStartDisc();
         ShowLegalMoves();
+        uiManager.SetPlayerText(gameState.CurrentPlayer);
     }
 
     // Update is called once per frame
@@ -47,7 +48,7 @@ public class GameManager : MonoBehaviour
         {
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
 
-            if (Physics.Raycast(ray, out RaycastHit hitInfo, 100f, boardLayer))
+            if (Physics.Raycast(ray, out RaycastHit hitInfo))
             {
                 Vector3 impact = hitInfo.point;
                 Position boardPos = SceneToBoardPos(impact);
@@ -61,23 +62,19 @@ public class GameManager : MonoBehaviour
         foreach (Position boardPos in gameState.LegalMoves.Keys)
         {
             Vector3 scenePos = BoardToScenePos(boardPos) + Vector3.up * 0.01f;
-            GameObject hightlight = Instantiate(hightlightPrefab, scenePos, Quaternion.identity);
-            hightlights.Add(hightlight);
+            GameObject highlight = Instantiate(highlightPrefab, scenePos, Quaternion.identity);
+            highlights.Add(highlight);
         }
     }
 
     private void HideLegalMoves()
     {
-        hightlights.ForEach(Destroy);
-        hightlights.Clear();
+        highlights.ForEach(Destroy);
+        highlights.Clear();
     }
 
     private void OnBoardClicked(Position boardPos)
     {
-        if (!canMove)
-        {
-            return;
-        }
         if (gameState.MakeMove(boardPos, out MoveInfo moveInfo))
         {
             StartCoroutine(OnMoveMade(moveInfo));
@@ -86,11 +83,10 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator OnMoveMade(MoveInfo moveInfo)
     {
-        canMove = false;
         HideLegalMoves();
         yield return ShowMove(moveInfo);
-        ShowLegalMoves();
-        canMove = true;
+        yield return ShowTurnOutcome(moveInfo);
+        ShowLegalMoves(); 
     }
 
     private Position SceneToBoardPos(Vector3 scenePos)
@@ -105,7 +101,7 @@ public class GameManager : MonoBehaviour
         return new Vector3(boardPos.Col + 0.75f, 0, 7 - boardPos.Row + 0.75f);
     }
 
-    private void SpawnDics(Disc prefab, Position boardPos)
+    private void SpawnDisc(Disc prefab, Position boardPos)
     {
         Vector3 scenePos = BoardToScenePos(boardPos) + Vector3.up * 0.1f;
         discs[boardPos.Row, boardPos.Col] = Instantiate(prefab, scenePos, Quaternion.identity);
@@ -116,7 +112,7 @@ public class GameManager : MonoBehaviour
         foreach (Position boardPos in gameState.OccupiedPosition())
         {
             Player player = gameState.Board[boardPos.Row, boardPos.Col];
-            SpawnDics(discPrefabs[player], boardPos);
+            SpawnDisc(discPrefabs[player], boardPos);
         }
     }
 
@@ -130,9 +126,83 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator ShowMove(MoveInfo moveInfo)
     {
-        SpawnDics(discPrefabs[moveInfo.Player], moveInfo.Position);
+        SpawnDisc(discPrefabs[moveInfo.Player], moveInfo.Position);
         yield return new WaitForSeconds(0.33f);
         FlipDiscs(moveInfo.OutFlanked);
         yield return new WaitForSeconds(0.83f);
+    }
+
+    private IEnumerator ShowTurnSkipped(Player skippedPlayer)
+    {
+        uiManager.SetSkippedText(skippedPlayer);
+        yield return uiManager.AnimateBottomText();
+    }
+
+    private IEnumerator ShowGameOver(Player Winner)
+    {
+        uiManager.SetBottomText("Neither Player Can Move");
+        yield return uiManager.AnimateBottomText();
+
+        yield return uiManager.ShowScoreText();
+        yield return new WaitForSeconds(0.5f);
+
+        yield return ShowCounting();
+
+        uiManager.SetWinnerText(Winner);
+        yield return uiManager.ShowEndScreen();
+    }
+
+    private IEnumerator ShowTurnOutcome(MoveInfo moveInfo)
+    {
+        if (gameState.GameOver)
+        {
+            yield return ShowGameOver(gameState.Winner);
+            yield break;
+        }
+
+        Player CurrentPlayer = gameState.CurrentPlayer;
+
+        if (CurrentPlayer == moveInfo.Player)
+        {
+            yield return ShowTurnSkipped(CurrentPlayer.Opponent());
+        }
+
+        uiManager.SetPlayerText(CurrentPlayer);
+    }
+
+    private IEnumerator ShowCounting()
+    {
+        int black = 0, white = 0;
+
+        foreach (Position pos in gameState.OccupiedPosition())
+        {
+            Player player = gameState.Board[pos.Row, pos.Col];
+
+            if (player == Player.Black)
+            {
+                black++;
+                uiManager.SetBlackScoreText(black);
+            }
+            else
+            {
+                white++;
+                uiManager.SetWhiteScoreText(white);
+            }
+
+            discs[pos.Row, pos.Col].Twitch();
+            yield return new WaitForSeconds(0.05f);
+        }
+    }
+
+    private IEnumerator RestartGame()
+    {
+        yield return uiManager.HideEndScreen();
+        Scene activeScene = SceneManager.GetActiveScene();
+        SceneManager.LoadScene(activeScene.name);
+    }
+
+    public void OnPlayAgainClicked()
+    {
+        StartCoroutine(RestartGame());
     }
 }
